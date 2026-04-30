@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Local-only — secrets and reference notes
+worker/
+ST API info.md
+
+# Stray empty subdir from local fs
+08-Field-Receiving-App/
+
+# Editor / OS clutter
+.vscode/
+.idea/
+*.log

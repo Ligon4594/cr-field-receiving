@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="C&R Receiving" />
+  <meta name="theme-color" content="#0a1628" />
+  <title>C&R Field Receiving</title>
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">C&amp;R</div>
+      <div class="brand-text">
+        <div class="brand-title">Field Receiving</div>
+        <div class="brand-sub">Since 1996</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span id="env-badge" class="env-badge env-mock">MOCK DATA</span>
+    </div>
+  </header>
+
+  <main id="app">
+    <!-- ===== PO LIST VIEW ===== -->
+    <section id="view-list" class="view view-active">
+      <div class="filter-row">
+        <button class="chip chip-active" data-vendor="all">All</button>
+        <button class="chip" data-vendor="Daikin Comfort">Daikin</button>
+        <button class="chip" data-vendor="Coburns">Coburns</button>
+        <button id="refresh-btn" class="chip chip-ghost" aria-label="Refresh">
+          <span class="chip-icon">&#x21bb;</span>
+          Refresh
+        </button>
+      </div>
+      <div id="po-list" class="po-list" role="list"></div>
+      <div id="po-empty" class="empty hidden">No open Purchase Orders for this vendor.</div>
+    </section>
+
+    <!-- ===== PO DETAIL VIEW ===== -->
+    <section id="view-detail" class="view">
+      <div class="detail-header">
+        <button class="back-btn" data-action="back-to-list">&larr; Back</button>
+        <div class="detail-meta">
+          <div id="detail-po-number" class="detail-po-number">PO-0000</div>
+          <div id="detail-vendor" class="detail-vendor">Vendor</div>
+        </div>
+      </div>
+
+      <div class="detail-summary">
+        <div class="summary-block">
+          <div class="summary-label">Job</div>
+          <div id="detail-job" class="summary-value">&mdash;</div>
+        </div>
+        <div class="summary-block">
+          <div class="summary-label">Expected</div>
+          <div id="detail-expected" class="summary-value">&mdash;</div>
+        </div>
+        <div class="summary-block">
+          <div class="summary-label">Confirmed</div>
+          <div id="detail-progress" class="summary-value progress">0 / 0</div>
+        </div>
+      </div>
+
+      <div class="items-header">
+        <h2>Line Items</h2>
+        <button id="scan-any-btn" class="btn btn-secondary">
+          <span class="btn-icon">&#x25a3;</span>
+          Scan Box
+        </button>
+      </div>
+
+      <div id="line-items" class="line-items"></div>
+
+      <div class="confirm-block">
+        <label class="field-label" for="vendor-doc">
+          Vendor Invoice / Document # <span class="required">*</span>
+        </label>
+        <input
+          id="vendor-doc"
+          type="text"
+          inputmode="text"
+          autocapitalize="characters"
+          autocomplete="off"
+          placeholder="e.g. HQ88066"
+          class="text-input"
+        />
+
+        <button id="submit-btn" class="btn btn-primary btn-lg" disabled>
+          Confirm &amp; Receive
+        </button>
+        <div id="submit-hint" class="hint">Confirm all items and enter the vendor document #.</div>
+      </div>
+    </section>
+
+    <!-- ===== SUCCESS VIEW ===== -->
+    <section id="view-success" class="view view-status">
+      <div class="status-icon status-ok">&#x2713;</div>
+      <h1>PO Received</h1>
+      <p id="success-message" class="status-msg">Marked as received in ServiceTitan.</p>
+      <button class="btn btn-primary btn-lg" data-action="back-to-list">Done</button>
+    </section>
+
+    <!-- ===== ERROR VIEW ===== -->
+    <section id="view-error" class="view view-status">
+      <div class="status-icon status-err">!</div>
+      <h1>Something went wrong</h1>
+      <p id="error-message" class="status-msg">Please try again.</p>
+      <div class="status-actions">
+        <button class="btn btn-secondary" data-action="back-to-detail">Back</button>
+        <button id="retry-btn" class="btn btn-primary">Retry</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== SCANNER OVERLAY ===== -->
+  <div id="scanner-overlay" class="scanner-overlay hidden">
+    <div class="scanner-frame">
+      <video id="scanner-video" autoplay muted playsinline></video>
+      <div class="scanner-reticle"></div>
+    </div>
+    <div class="scanner-hint" id="scanner-hint">Point camera at barcode</div>
+    <div class="scanner-actions">
+      <button id="scanner-manual" class="btn btn-secondary">Type Instead</button>
+      <button id="scanner-cancel" class="btn btn-ghost">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ===== TOAST ===== -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="js/api.js"></script>
+  <script src="js/scanner.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
