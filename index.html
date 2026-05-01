@@ -65,6 +65,25 @@
         </div>
       </div>
 
+      <!-- Invoice scan card — prominently above items -->
+      <div id="invoice-card" class="invoice-card">
+        <input type="file" id="invoice-file-input" accept="image/*" capture="environment" class="hidden" />
+        <div class="invoice-card-body">
+          <div id="invoice-card-icon" class="invoice-card-icon">&#x1F4C4;</div>
+          <div class="invoice-card-text">
+            <div id="invoice-card-title" class="invoice-card-title">Scan Vendor Invoice</div>
+            <div id="invoice-card-sub" class="invoice-card-sub">Auto-fill invoice # and billed prices</div>
+          </div>
+        </div>
+        <button id="invoice-scan-btn" class="btn btn-secondary">Scan</button>
+      </div>
+
+      <!-- Invoice scanning spinner (shown during Claude processing) -->
+      <div id="invoice-scanning" class="invoice-scanning hidden">
+        <div class="scan-spinner"></div>
+        <span>Reading invoice&hellip;</span>
+      </div>
+
       <div class="items-header">
         <h2>Line Items</h2>
         <button id="scan-any-btn" class="btn btn-secondary">
@@ -74,6 +93,17 @@
       </div>
 
       <div id="line-items" class="line-items"></div>
+
+      <!-- Items not on original PO -->
+      <div class="unlisted-section">
+        <div class="items-header">
+          <h2 class="unlisted-heading">Not on PO</h2>
+          <button id="add-unlisted-btn" class="btn btn-secondary">
+            <span class="btn-icon">+</span> Add Item
+          </button>
+        </div>
+        <div id="unlisted-items" class="line-items"></div>
+      </div>
 
       <div class="confirm-block">
         <label class="field-label" for="vendor-doc">

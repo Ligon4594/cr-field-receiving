@@ -9,9 +9,43 @@ window.CONFIG = {
   useMock: false,
   tenantId: '4029621142',
   proxyBase: 'https://cr-st-proxy.tligon.workers.dev',
-  allowedVendors: ['Daikin Comfort', 'Coburns'],
+  // Vendor IDs from ServiceTitan (API returns vendorId integer, not vendorName string)
+  // 1609 = Daikin Comfort; Coburns ID is discovered dynamically via loadVendors()
+  allowedVendorIds: [1609],
+  allowedVendorNames: ['Daikin Comfort', 'Coburns'], // used to auto-discover IDs
   allowedStatuses: ['Sent', 'Pending'],
 };
+
+/* ============ VENDOR MAP ============ */
+// Maps vendorId (int) → display name. Pre-seeded with known ID; loadVendors()
+// fills in the rest at startup so we never miss a vendor name.
+const VENDOR_MAP = {
+  1609: 'Daikin Comfort',
+};
+
+/** Fetch all vendors from ST and populate VENDOR_MAP + CONFIG.allowedVendorIds. */
+async function loadVendors() {
+  if (CONFIG.useMock) return; // mock data has inline vendorName, no lookup needed
+  try {
+    const data = await stFetch(
+      `/inventory/v2/tenant/${CONFIG.tenantId}/vendors?pageSize=200`
+    );
+    const vendors = data.data || data.vendors || [];
+    vendors.forEach(v => {
+      if (v.id && v.name) VENDOR_MAP[v.id] = v.name;
+    });
+    // Build allowedVendorIds from any vendor whose name contains an allowed keyword
+    const ids = vendors
+      .filter(v => CONFIG.allowedVendorNames.some(n =>
+        (v.name || '').toLowerCase().includes(n.toLowerCase())
+      ))
+      .map(v => v.id);
+    if (ids.length) CONFIG.allowedVendorIds = ids;
+  } catch (e) {
+    // Non-fatal: fall back to the pre-seeded IDs already in CONFIG.allowedVendorIds
+    console.warn('loadVendors failed, using pre-seeded vendor IDs:', e.message);
+  }
+}
 
 /* ============ MOCK DATA ============ */
 const MOCK_POS = [
@@ -159,17 +193,16 @@ const API = {
     }
     // Live: pull each allowed status separately, merge, then filter vendors client-side
     // since /purchase-orders accepts a single status param.
+    // Note: ST list endpoint returns vendorId (int) NOT vendorName — filter by ID.
     const all = [];
     for (const status of CONFIG.allowedStatuses) {
       const data = await stFetch(
-        `/inventory/v2/tenant/${CONFIG.tenantId}/purchase-orders?status=${status}&pageSize=50`
+        `/inventory/v2/tenant/${CONFIG.tenantId}/purchase-orders?status=${status}&pageSize=200`
       );
       all.push(...(data.data || []));
     }
     return all
-      .filter(po => CONFIG.allowedVendors.some(v =>
-        (po.vendorName || '').toLowerCase().includes(v.toLowerCase())
-      ))
+      .filter(po => CONFIG.allowedVendorIds.includes(po.vendorId))
       .map(normalizePO);
   },
 
@@ -184,46 +217,155 @@ const API = {
     return normalizePO(data);
   },
 
-  /** Submit a receipt for a PO. payload: { poId, items: [{id, quantity, serial?}], vendorDocNumber } */
+  /** Submit a receipt for a PO.
+   *  payload: { poId, items: [{id, quantity, serial?}], vendorDocNumber,
+   *             unlistedItems?: [{skuId, quantity, serial?}] }
+   */
   async submitReceipt(payload) {
     if (CONFIG.useMock) {
       await fakeDelay(700);
-      // Simulate occasional flake to test error path
       if (payload.vendorDocNumber === 'FAIL') throw new Error('Simulated failure');
       return { receiptId: `MOCK-${Date.now()}`, success: true };
     }
+    const poItems = payload.items.map(i => ({
+      skuId: i.id,
+      quantity: i.quantity,
+      serialNumber: i.serial || undefined,
+    }));
+    const extraItems = (payload.unlistedItems || [])
+      .filter(i => i.skuId) // only include items with a valid ST skuId
+      .map(i => ({
+        skuId: i.skuId,
+        quantity: i.quantity,
+        serialNumber: i.serial || undefined,
+      }));
     const body = {
       purchaseOrderId: payload.poId,
       vendorDocumentNumber: payload.vendorDocNumber,
-      items: payload.items.map(i => ({
-        skuId: i.id,
-        quantity: i.quantity,
-        serialNumber: i.serial || undefined,
-      })),
+      items: [...poItems, ...extraItems],
     };
     return stFetch(`/inventory/v2/tenant/${CONFIG.tenantId}/receipts`, {
       method: 'POST',
       body: JSON.stringify(body),
     });
   },
+
+  /** Scan a vendor invoice image and extract line items + pricing via Claude Vision.
+   *  imageBase64: base64-encoded JPEG string (strip the data:... prefix first).
+   */
+  async scanInvoice(imageBase64, mediaType = 'image/jpeg') {
+    if (CONFIG.useMock) {
+      await fakeDelay(1400);
+      return {
+        invoiceNumber: 'HQ88066',
+        invoiceDate: '2026-04-28',
+        vendorName: 'Daikin Comfort',
+        lineItems: [
+          { sku: 'DZ16TC0361A', description: 'Daikin DZ16TC 3-Ton Condenser', quantity: 1, unitPrice: 1842.50, totalPrice: 1842.50 },
+          { sku: 'DV36SC0361A', description: 'Daikin DV36SC Air Handler 36k', quantity: 1, unitPrice: 987.00, totalPrice: 987.00 },
+          { sku: 'CONS-LINE-3458', description: '3/8" x 5/8" Line Set 25ft', quantity: 2, unitPrice: 48.75, totalPrice: 97.50 },
+        ],
+        subtotal: 2927.00,
+        tax: 0,
+        total: 2927.00,
+      };
+    }
+    const res = await fetch(`${CONFIG.proxyBase}/vision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageBase64, mediaType }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`Invoice scan failed: ${res.status} ${t.slice(0, 120)}`);
+    }
+    return res.json();
+  },
+
+  /** Look up a part in the ST pricebook by barcode / SKU code.
+   *  Returns { skuId, sku, description, isEquipment } or null if not found.
+   */
+  async lookupSKU(query) {
+    if (CONFIG.useMock) {
+      await fakeDelay(400);
+      return null; // nothing in mock pricebook
+    }
+    try {
+      // Try materials first, then equipment
+      for (const type of ['materials', 'equipment']) {
+        const data = await stFetch(
+          `/pricebook/v2/tenant/${CONFIG.tenantId}/${type}?search=${encodeURIComponent(query)}&pageSize=5`
+        );
+        const items = data.data || [];
+        if (items.length > 0) {
+          const it = items[0];
+          return {
+            skuId: it.id,
+            sku: it.code || it.sku || '',
+            description: it.displayName || it.name || it.description || '',
+            isEquipment: type === 'equipment' || !!(it.serialized),
+          };
+        }
+      }
+    } catch { /* fall through */ }
+    return null;
+  },
 };
 
 /* ============ HELPERS ============ */
 function fakeDelay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+/**
+ * Resize a File/Blob to max 1024px and return base64 JPEG string (no data: prefix).
+ * iPad photos can be 8+ MB — this keeps the Claude API payload small.
+ */
+window.resizeImageToBase64 = function(file, maxDim = 1024) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const ratio = Math.min(maxDim / img.width, maxDim / img.height, 1);
+      const w = Math.round(img.width * ratio);
+      const h = Math.round(img.height * ratio);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+};
+
+/** Flatten a ST shipTo address object into a readable string. */
+function formatAddress(shipTo) {
+  if (!shipTo) return '';
+  if (typeof shipTo === 'string') return shipTo;
+  const parts = [
+    shipTo.street,
+    shipTo.unit,
+    shipTo.city ? shipTo.city.trim() : null,
+    shipTo.state,
+    shipTo.zip,
+  ].filter(Boolean);
+  return parts.join(', ');
+}
+
 function normalizePO(raw) {
   // Maps a raw ST response into the shape app.js expects.
-  // Field names below are best-guess from the ST docs and may need tweaking
-  // once we see real responses — keep here so app.js stays clean.
+  // ST list endpoint confirmed field names (from live API inspection 2026-04-30):
+  //   vendorId (int, NOT vendorName), shipTo (NOT jobAddress), requiredOn (NOT expectedOn)
   return {
     id: raw.id,
     number: raw.number || `PO-${raw.id}`,
-    vendorName: raw.vendorName || raw.vendor?.name || '',
+    vendorName: VENDOR_MAP[raw.vendorId] || raw.vendorName || raw.vendor?.name || `Vendor ${raw.vendorId}`,
     vendorId: raw.vendorId,
     status: raw.status,
     jobNumber: raw.jobNumber || raw.job?.number || '',
-    jobAddress: raw.jobAddress || raw.shipTo || '',
-    expectedOn: raw.expectedOn || raw.requiredOn || '',
+    jobAddress: formatAddress(raw.shipTo) || raw.jobAddress || '',
+    expectedOn: raw.requiredOn || raw.expectedOn || '',
     items: (raw.items || []).map(it => ({
       id: it.id || it.skuId,
       sku: it.skuName || it.sku || '',
