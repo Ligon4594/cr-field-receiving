@@ -1,6 +1,6 @@
-/* Barcode scanner — wraps native BarcodeDetector when available,
-   falls back to ZXing-js for Safari. ZXing is loaded lazily from a CDN
-   only if needed, so the rest of the app stays fast.
+/* Barcode scanner — uses native BarcodeDetector when available (Chrome/Android),
+   falls back to @undecaf/barcode-detector-polyfill (ZXing-based, works on iOS Safari).
+   Polyfill is loaded lazily from CDN only when needed.
 */
 
 const Scanner = (() => {
@@ -12,14 +12,12 @@ const Scanner = (() => {
 
   let stream = null;
   let detector = null;
-  let zxingReader = null;
   let rafId = null;
   let activeResolve = null;
   let activeReject = null;
 
   async function start({ purpose = 'box' } = {}) {
     if (activeResolve) {
-      // Reject any in-flight scan first
       stop('cancelled');
     }
     return new Promise(async (resolve, reject) => {
@@ -30,22 +28,22 @@ const Scanner = (() => {
         : 'Point camera at box barcode';
       overlay().classList.remove('hidden');
 
+      // ── Start camera stream ────────────────────────────────────────────────
       try {
-        // Use { ideal } so Safari gracefully falls back instead of showing black
+        // Use { ideal } so Safari falls back gracefully instead of showing black
         stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: 'environment' } },
           audio: false,
         });
         const vid = video();
         vid.srcObject = stream;
-        // Wait for metadata before calling play() — prevents black frame on iOS Safari
+        // Wait for metadata before play() — prevents black frame on iOS Safari
         await new Promise((res) => {
           if (vid.readyState >= 1) { res(); return; }
           vid.addEventListener('loadedmetadata', res, { once: true });
         });
         await vid.play().catch(() => {});
       } catch (err) {
-        // Camera blocked or unavailable — fall back to manual entry
         stop();
         const typed = window.prompt('Camera unavailable. Type the code:');
         if (typed && typed.trim()) resolve({ code: typed.trim(), method: 'typed' });
@@ -53,17 +51,30 @@ const Scanner = (() => {
         return;
       }
 
-      if ('BarcodeDetector' in window) {
+      // ── Set up barcode detector ────────────────────────────────────────────
+      const formats = ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code', 'data_matrix'];
+
+      if (!('BarcodeDetector' in window)) {
+        // Load polyfill — exposes the same BarcodeDetector API, ZXing-based
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/@undecaf/barcode-detector-polyfill/dist/index.js';
+          s.onload = res;
+          s.onerror = rej;
+          document.head.appendChild(s);
+        }).catch(() => {});
+      }
+
+      if (!('BarcodeDetector' in window)) {
+        // CDN failed — show hint and let user type
+        hint().textContent = 'Scanner unavailable — type the code';
+      } else {
         try {
-          detector = new BarcodeDetector({
-            formats: ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code', 'data_matrix']
-          });
+          detector = new BarcodeDetector({ formats });
           loopNative();
         } catch (e) {
-          await loadZxingFallback();
+          hint().textContent = 'Scanner unavailable — type the code';
         }
-      } else {
-        await loadZxingFallback();
       }
 
       cancelBtn().onclick = () => stop('cancelled');
@@ -93,37 +104,9 @@ const Scanner = (() => {
     tick();
   }
 
-  async function loadZxingFallback() {
-    if (!window.ZXing) {
-      await new Promise((res, rej) => {
-        const s = document.createElement('script');
-        s.src = 'https://unpkg.com/@zxing/browser@0.1.4/umd/zxing-browser.min.js';
-        s.onload = res;
-        s.onerror = rej;
-        document.head.appendChild(s);
-      }).catch(() => {});
-    }
-    if (!window.ZXing) {
-      hint().textContent = 'Scanner unavailable — type the code';
-      return;
-    }
-    zxingReader = new ZXing.BrowserMultiFormatReader();
-    zxingReader.decodeFromVideoElement(video(), (result) => {
-      if (result) {
-        const code = result.getText();
-        stop();
-        activeResolve && activeResolve({ code, method: 'camera' });
-      }
-    }).catch(() => {});
-  }
-
   function stop(reason) {
     if (rafId) cancelAnimationFrame(rafId);
     rafId = null;
-    if (zxingReader) {
-      try { zxingReader.reset(); } catch (_) {}
-      zxingReader = null;
-    }
     detector = null;
     if (stream) {
       stream.getTracks().forEach(t => t.stop());
