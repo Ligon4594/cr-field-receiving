@@ -282,6 +282,26 @@ const API = {
     return res.json();
   },
 
+  /** Send a camera frame to Claude Vision to read a barcode.
+   *  Returns { code: string } or { code: null } if nothing found.
+   */
+  async scanBarcode(imageBase64) {
+    if (CONFIG.useMock) {
+      await fakeDelay(800);
+      return { code: 'MOCK-CODE-12345' };
+    }
+    const res = await fetch(`${CONFIG.proxyBase}/vision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageBase64, mediaType: 'image/jpeg', mode: 'barcode' }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`Barcode scan failed: ${res.status} ${t.slice(0, 120)}`);
+    }
+    return res.json();
+  },
+
   /** Look up a part in the ST pricebook by barcode / SKU code.
    *  Returns { skuId, sku, description, isEquipment } or null if not found.
    */

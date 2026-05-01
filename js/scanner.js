@@ -1,14 +1,16 @@
-/* Barcode scanner — uses native BarcodeDetector when available (Chrome/Android),
-   falls back to @undecaf/barcode-detector-polyfill (ZXing-based, works on iOS Safari).
-   Polyfill is loaded lazily from CDN only when needed.
+/* Barcode scanner — uses native BarcodeDetector when available (Chrome/Android).
+   On iOS Safari where BarcodeDetector is unavailable, falls back to a "Capture"
+   button that grabs a frame from the live video and sends it to Claude Vision
+   (via the Cloudflare worker) to read the barcode. No external CDN required.
 */
 
 const Scanner = (() => {
-  const overlay = () => document.getElementById('scanner-overlay');
-  const video = () => document.getElementById('scanner-video');
-  const hint = () => document.getElementById('scanner-hint');
-  const cancelBtn = () => document.getElementById('scanner-cancel');
-  const manualBtn = () => document.getElementById('scanner-manual');
+  const overlay    = () => document.getElementById('scanner-overlay');
+  const video      = () => document.getElementById('scanner-video');
+  const hint       = () => document.getElementById('scanner-hint');
+  const cancelBtn  = () => document.getElementById('scanner-cancel');
+  const manualBtn  = () => document.getElementById('scanner-manual');
+  const captureBtn = () => document.getElementById('scanner-capture');
 
   let stream = null;
   let detector = null;
@@ -17,27 +19,26 @@ const Scanner = (() => {
   let activeReject = null;
 
   async function start({ purpose = 'box' } = {}) {
-    if (activeResolve) {
-      stop('cancelled');
-    }
+    if (activeResolve) stop('cancelled');
+
     return new Promise(async (resolve, reject) => {
       activeResolve = resolve;
-      activeReject = reject;
+      activeReject  = reject;
+
       hint().textContent = purpose === 'serial'
         ? 'Scan or type the serial number'
         : 'Point camera at box barcode';
       overlay().classList.remove('hidden');
+      captureBtn().classList.add('hidden');
 
-      // ── Start camera stream ────────────────────────────────────────────────
+      // ── Start camera stream ──────────────────────────────────────────────
       try {
-        // Use { ideal } so Safari falls back gracefully instead of showing black
         stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: 'environment' } },
           audio: false,
         });
         const vid = video();
         vid.srcObject = stream;
-        // Wait for metadata before play() — prevents black frame on iOS Safari
         await new Promise((res) => {
           if (vid.readyState >= 1) { res(); return; }
           vid.addEventListener('loadedmetadata', res, { once: true });
@@ -51,30 +52,20 @@ const Scanner = (() => {
         return;
       }
 
-      // ── Set up barcode detector ────────────────────────────────────────────
-      const formats = ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code', 'data_matrix'];
-
-      if (!('BarcodeDetector' in window)) {
-        // Load polyfill — exposes the same BarcodeDetector API, ZXing-based
-        await new Promise((res, rej) => {
-          const s = document.createElement('script');
-          s.src = 'https://cdn.jsdelivr.net/npm/@undecaf/barcode-detector-polyfill/dist/index.js';
-          s.onload = res;
-          s.onerror = rej;
-          document.head.appendChild(s);
-        }).catch(() => {});
-      }
-
-      if (!('BarcodeDetector' in window)) {
-        // CDN failed — show hint and let user type
-        hint().textContent = 'Scanner unavailable — type the code';
-      } else {
+      // ── Try native BarcodeDetector (Chrome / Android / newer Webkit) ─────
+      if ('BarcodeDetector' in window) {
         try {
-          detector = new BarcodeDetector({ formats });
+          detector = new BarcodeDetector({
+            formats: ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code', 'data_matrix'],
+          });
           loopNative();
+          // buttons wired below
         } catch (e) {
-          hint().textContent = 'Scanner unavailable — type the code';
+          startVisionFallback(resolve, reject);
         }
+      } else {
+        // iOS Safari — use Vision fallback
+        startVisionFallback(resolve, reject);
       }
 
       cancelBtn().onclick = () => stop('cancelled');
@@ -87,6 +78,7 @@ const Scanner = (() => {
     });
   }
 
+  // ── Native detect loop (BarcodeDetector available) ──────────────────────────
   function loopNative() {
     const tick = async () => {
       if (!detector || !video()) return;
@@ -104,6 +96,44 @@ const Scanner = (() => {
     tick();
   }
 
+  // ── Vision fallback (iOS Safari) ────────────────────────────────────────────
+  function startVisionFallback(resolve, reject) {
+    hint().textContent = 'Aim at barcode, then tap Capture';
+    captureBtn().classList.remove('hidden');
+    captureBtn().disabled = false;
+
+    captureBtn().onclick = async () => {
+      const vid = video();
+      if (!vid || !vid.videoWidth) return;
+
+      // Grab a frame from the live video
+      const canvas = document.createElement('canvas');
+      canvas.width  = vid.videoWidth;
+      canvas.height = vid.videoHeight;
+      canvas.getContext('2d').drawImage(vid, 0, 0);
+      const base64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+
+      hint().textContent = 'Reading…';
+      captureBtn().disabled = true;
+
+      try {
+        const result = await API.scanBarcode(base64);
+        if (result && result.code) {
+          captureBtn().classList.add('hidden');
+          stop();
+          activeResolve && activeResolve({ code: result.code, method: 'camera' });
+        } else {
+          hint().textContent = 'No barcode found — try again or type it';
+          captureBtn().disabled = false;
+        }
+      } catch (err) {
+        hint().textContent = 'Read error — try again or type it';
+        captureBtn().disabled = false;
+      }
+    };
+  }
+
+  // ── Stop & clean up ─────────────────────────────────────────────────────────
   function stop(reason) {
     if (rafId) cancelAnimationFrame(rafId);
     rafId = null;
@@ -112,12 +142,13 @@ const Scanner = (() => {
       stream.getTracks().forEach(t => t.stop());
       stream = null;
     }
+    captureBtn().classList.add('hidden');
     overlay().classList.add('hidden');
     if (reason === 'cancelled' && activeReject) {
       activeReject(new Error('cancelled'));
     }
     activeResolve = null;
-    activeReject = null;
+    activeReject  = null;
   }
 
   return { start, stop };
