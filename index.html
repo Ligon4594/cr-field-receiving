@@ -67,7 +67,7 @@
 
       <!-- Invoice scan card — prominently above items -->
       <div id="invoice-card" class="invoice-card">
-        <input type="file" id="invoice-file-input" accept="image/*" capture="environment" class="hidden" />
+        <input type="file" id="invoice-file-input" accept="image/*" class="hidden" />
         <div class="invoice-card-body">
           <div id="invoice-card-icon" class="invoice-card-icon">&#x1F4C4;</div>
           <div class="invoice-card-text">
@@ -149,7 +149,7 @@
   <!-- ===== SCANNER OVERLAY ===== -->
   <div id="scanner-overlay" class="scanner-overlay hidden">
     <div class="scanner-frame">
-      <video id="scanner-video" autoplay muted playsinline></video>
+      <video id="scanner-video" autoplay muted playsinline webkit-playsinline></video>
       <div class="scanner-reticle"></div>
     </div>
     <div class="scanner-hint" id="scanner-hint">Point camera at barcode</div>

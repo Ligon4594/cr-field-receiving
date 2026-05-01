@@ -31,12 +31,19 @@ const Scanner = (() => {
       overlay().classList.remove('hidden');
 
       try {
+        // Use { ideal } so Safari gracefully falls back instead of showing black
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
+          video: { facingMode: { ideal: 'environment' } },
           audio: false,
         });
-        video().srcObject = stream;
-        await video().play();
+        const vid = video();
+        vid.srcObject = stream;
+        // Wait for metadata before calling play() — prevents black frame on iOS Safari
+        await new Promise((res) => {
+          if (vid.readyState >= 1) { res(); return; }
+          vid.addEventListener('loadedmetadata', res, { once: true });
+        });
+        await vid.play().catch(() => {});
       } catch (err) {
         // Camera blocked or unavailable — fall back to manual entry
         stop();
